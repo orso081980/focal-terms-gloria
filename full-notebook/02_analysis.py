@@ -156,7 +156,7 @@ term_counts = (
 most_used = (
     term_counts
     .sort("frequency", descending=True)
-    .head(20)
+    .head(200)
 )
 
 least_used = (

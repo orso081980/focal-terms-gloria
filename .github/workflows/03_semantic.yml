@@ -3,6 +3,7 @@ name: 03 – Semantic Similarity
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   run:

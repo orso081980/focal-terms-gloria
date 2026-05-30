@@ -1,0 +1,21 @@
+name: 00 – Run Full Pipeline
+# Runs all three pipeline steps in order:
+#   Step 1 (focal terms) → Step 2 (analysis) + Step 3 (semantic) in parallel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  step1:
+    uses: ./.github/workflows/01_focal_terms.yml
+    secrets: inherit
+
+  step2:
+    needs: step1
+    uses: ./.github/workflows/02_analysis.yml
+    secrets: inherit
+
+  step3:
+    needs: step1
+    uses: ./.github/workflows/03_semantic.yml
+    secrets: inherit

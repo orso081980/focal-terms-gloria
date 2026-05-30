@@ -88,6 +88,43 @@
               </div>
             </div>
           </section>
+
+          <!-- Top 10 patents + Most used terms (from Step 2 data) -->
+          <template v-if="step2">
+            <section class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <h2 class="text-sm font-semibold text-slate-600 mb-4">Top 10 patents by focal-term count</h2>
+                <table class="w-full text-sm">
+                  <thead class="bg-slate-50">
+                    <tr>
+                      <th class="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase">#</th>
+                      <th class="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase">Patent ID</th>
+                      <th class="px-3 py-2 text-right text-xs font-semibold text-slate-500 uppercase">Focal terms</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(p, i) in step2.top_10_patents"
+                      :key="p.patent_id"
+                      class="border-t border-slate-100 hover:bg-indigo-50 transition-colors"
+                    >
+                      <td class="px-3 py-2 text-slate-400">{{ i + 1 }}</td>
+                      <td class="px-3 py-2">
+                        <span class="bg-indigo-100 text-indigo-700 text-xs font-medium px-2 py-0.5 rounded">{{ p.patent_id }}</span>
+                      </td>
+                      <td class="px-3 py-2 text-right font-bold text-indigo-700">{{ p.num_focal_terms }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <h2 class="text-sm font-semibold text-slate-600 mb-4">Most frequently shared terms (top 20)</h2>
+                <div class="h-72">
+                  <ChartWidget type="bar" :data="mostUsedChart" :options="horizBarOpts" />
+                </div>
+              </div>
+            </section>
+          </template>
         </template>
       </template>
 
@@ -258,6 +295,53 @@
               >
             </div>
           </section>
+
+          <!-- Searchable, paginated terms browser -->
+          <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <h2 class="text-sm font-semibold text-slate-600 mb-3">Browse all focal terms</h2>
+            <div class="flex flex-col sm:flex-row gap-3 mb-4">
+              <input
+                v-model="termSearch"
+                type="text"
+                placeholder="Search terms…"
+                class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+              <span class="text-xs text-slate-400 self-center whitespace-nowrap">
+                {{ filteredTerms.length }} result{{ filteredTerms.length !== 1 ? 's' : '' }}
+              </span>
+            </div>
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50">
+                <tr>
+                  <th class="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase">Term</th>
+                  <th class="px-3 py-2 text-right text-xs font-semibold text-slate-500 uppercase">Frequency</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="t in pagedTerms"
+                  :key="t.focal_term"
+                  class="border-t border-slate-100 hover:bg-indigo-50 transition-colors"
+                >
+                  <td class="px-3 py-2 font-medium text-slate-700">{{ t.focal_term }}</td>
+                  <td class="px-3 py-2 text-right text-indigo-700 font-semibold">{{ t.frequency }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="flex items-center justify-between mt-4">
+              <button
+                :disabled="termPage <= 1"
+                @click="termPage--"
+                class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50 transition-colors"
+              >← Previous</button>
+              <span class="text-xs text-slate-500">Page {{ termPage }} / {{ totalTermPages }}</span>
+              <button
+                :disabled="termPage >= totalTermPages"
+                @click="termPage++"
+                class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-slate-50 transition-colors"
+              >Next →</button>
+            </div>
+          </section>
         </template>
       </template>
 
@@ -402,7 +486,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import ChartWidget from "./components/ChartWidget.vue";
 import StatCard from "./components/StatCard.vue";
 
@@ -519,5 +603,29 @@ const simCards = computed(() => {
     { label: "Max", value: s.max.toFixed(3) },
     { label: "Sample pairs", value: fmt(s.n_pairs) },
   ];
+});
+
+// ── Terms browser (Step 2 + Overview) ────────────────────────
+const TERMS_PER_PAGE = 20;
+const termSearch = ref("");
+const termPage = ref(1);
+
+const filteredTerms = computed(() => {
+  if (!step2.value?.most_used_terms) return [];
+  const q = termSearch.value.toLowerCase().trim();
+  return q
+    ? step2.value.most_used_terms.filter((t) => t.focal_term.toLowerCase().includes(q))
+    : step2.value.most_used_terms;
+});
+
+const totalTermPages = computed(() => Math.max(1, Math.ceil(filteredTerms.value.length / TERMS_PER_PAGE)));
+
+const pagedTerms = computed(() => {
+  const start = (termPage.value - 1) * TERMS_PER_PAGE;
+  return filteredTerms.value.slice(start, start + TERMS_PER_PAGE);
+});
+
+watch(termSearch, () => {
+  termPage.value = 1;
 });
 </script>
