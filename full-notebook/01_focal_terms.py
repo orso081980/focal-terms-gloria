@@ -86,7 +86,18 @@ pat_lazy = (
 #
 # sink_parquet uses Polars' partitioned streaming engine: data is hashed by
 # join key and processed partition-by-partition, so peak RAM stays bounded.
-print("\nStep 4: Streaming join to disk (this may take a while)...")
+#
+# IMPORTANT: group_by + agg is NOT supported before sink_parquet in the
+# streaming engine — it requires a full in-memory hash map and causes
+# cancellation. So we split into two steps:
+#   4a) Stream the join (join + select only) into a temp file WITH pmid
+#   4b) Aggregate the smaller temp file to sum freq_in_cited_paper across PMIDs
+
+TEMP_PATH = OUT_DIR / "focal_terms_with_pmid_tmp.parquet"
+if TEMP_PATH.exists():
+    TEMP_PATH.unlink()
+
+print("\nStep 4a: Streaming three-way join to temp file (join only, no aggregation)...")
 t0 = time.time()
 
 (
@@ -94,6 +105,19 @@ t0 = time.time()
     .join(pmed_lazy, on="pmid", how="inner")
     .join(pat_lazy, on=["patent_id", "term"], how="inner")
     .rename({"term": "focal_term"})
+    .select("patent_id", "pmid", "focal_term", "freq_in_patent", "freq_in_cited_paper")
+    .sink_parquet(TEMP_PATH)
+)
+
+print(f"  Temp file written | {elapsed(t0)}")
+
+# Step 4b: Aggregate across PMIDs — sum freq_in_cited_paper per (patent_id, focal_term).
+# The temp file is much smaller than the raw inputs, so this collect is safe.
+print("\nStep 4b: Aggregating across PMIDs...")
+t0 = time.time()
+
+(
+    pl.scan_parquet(TEMP_PATH)
     .group_by("patent_id", "focal_term")
     .agg(
         pl.first("freq_in_patent"),
@@ -102,6 +126,7 @@ t0 = time.time()
     .sink_parquet(FINAL_PATH)
 )
 
+TEMP_PATH.unlink(missing_ok=True)
 print(f"  Saved to: {FINAL_PATH} | {elapsed(t0)}")
 
 # =========================
