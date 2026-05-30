@@ -1,0 +1,185 @@
+name: 03 – Semantic Similarity
+# Requires 01 to have run first (downloads focal_terms_full.parquet from R2)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      POLARS_MAX_THREADS: "4"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            polars pyarrow boto3 numpy matplotlib scipy scikit-learn \
+            sentence-transformers
+
+      - name: Create directories
+        run: mkdir -p data output visualizations
+
+      - name: Download focal_terms_full.parquet from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_ACCESS_SECRET }}
+        run: |
+          python - <<'EOF'
+          import boto3, os
+          s3 = boto3.client(
+              's3',
+              endpoint_url='https://977a2b4bf497816f10a436148fcf51b9.r2.cloudflarestorage.com',
+              aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          key = "outcomes/01_focal_terms_full.parquet"
+          dest = 'output/focal_terms_full.parquet'
+          print(f"Downloading {key} -> {dest}...")
+          s3.download_file('parquetunistuttgart', key, dest)
+          print(f"  saved ({os.path.getsize(dest) / 1e6:.1f} MB)")
+          EOF
+
+      - name: Download raw parquet files from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_ACCESS_SECRET }}
+        run: |
+          python - <<'EOF'
+          import boto3, os
+          s3 = boto3.client(
+              's3',
+              endpoint_url='https://977a2b4bf497816f10a436148fcf51b9.r2.cloudflarestorage.com',
+              aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          bucket = 'parquetunistuttgart'
+          files = {
+              'FullSampleGloria_Pat_GlinerLabels.parquet':           'data/FullSampleGloria_Pat_GlinerLabels_16042026.parquet',
+              'FullSampleGloria_Link_PmidOa.parquet':                'data/FullSampleGloria_Link_PmidOa_16042026.parquet',
+              'FullSampleGloria_Pmed_GlinerLabels_16042026.parquet': 'data/FullSampleGloria_Pmed_GlinerLabels_16042026.parquet',
+          }
+          for r2_key, local_path in files.items():
+              print(f"Downloading {r2_key} -> {local_path}...")
+              s3.download_file(bucket, r2_key, local_path)
+              print(f"  saved ({os.path.getsize(local_path) / 1e6:.1f} MB)")
+          EOF
+
+      - name: Run 03_semantic.py
+        run: python full-notebook/03_semantic.py
+
+      - name: Export viewer_data.json
+        run: |
+          python - <<'EOF'
+          import polars as pl, json, numpy as np
+          from pathlib import Path
+
+          out_dir = Path("output")
+
+          focal = pl.read_parquet(out_dir / "focal_terms_full.parquet")
+
+          per_patent = focal.group_by("patent_id").agg(
+              pl.col("focal_term").n_unique().alias("n")
+          )
+          median_val = per_patent["n"].median()
+
+          summary = {
+              "total_focal_pairs":       int(len(focal)),
+              "unique_patents":          int(focal["patent_id"].n_unique()),
+              "unique_terms":            int(focal["focal_term"].n_unique()),
+              "median_terms_per_patent": int(median_val) if median_val is not None else 0,
+          }
+
+          top_terms = (
+              focal.group_by("focal_term")
+              .agg(pl.col("patent_id").n_unique().alias("patent_count"))
+              .sort("patent_count", descending=True)
+              .head(20)
+              .to_dicts()
+          )
+
+          vc = per_patent["n"].value_counts().sort("n")
+          count_col = "count" if "count" in vc.columns else "counts"
+          distribution = [
+              {"bin": int(r["n"]), "count": int(r[count_col])}
+              for r in vc.iter_rows(named=True)
+              if r["n"] <= 50
+          ]
+
+          sim_path = out_dir / "task3_cosine_similarity_sample.parquet"
+          similarity = {}
+          if sim_path.exists():
+              sim = pl.read_parquet(sim_path)
+              vals = sim["cosine_similarity"].to_numpy()
+              similarity = {
+                  "mean":    round(float(vals.mean()), 4),
+                  "median":  round(float(np.median(vals)), 4),
+                  "std":     round(float(vals.std()), 4),
+                  "min":     round(float(vals.min()), 4),
+                  "max":     round(float(vals.max()), 4),
+                  "n_pairs": int(len(vals)),
+                  "high_examples": (
+                      sim.sort("cosine_similarity", descending=True)
+                      .head(10)
+                      .select("patent_id", "focal_term", "cosine_similarity")
+                      .to_dicts()
+                  ),
+                  "low_examples": (
+                      sim.sort("cosine_similarity")
+                      .head(10)
+                      .select("patent_id", "focal_term", "cosine_similarity")
+                      .to_dicts()
+                  ),
+              }
+
+          payload = {
+              "summary":      summary,
+              "top_terms":    top_terms,
+              "distribution": distribution,
+              "similarity":   similarity,
+          }
+
+          out_path = out_dir / "viewer_data.json"
+          out_path.write_text(json.dumps(payload, indent=2))
+          print(f"viewer_data.json written ({out_path.stat().st_size / 1024:.1f} KB)")
+          EOF
+
+      - name: Upload outputs to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_ACCESS_SECRET }}
+        run: |
+          python - <<'EOF'
+          import boto3, os
+          s3 = boto3.client(
+              's3',
+              endpoint_url='https://977a2b4bf497816f10a436148fcf51b9.r2.cloudflarestorage.com',
+              aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+              aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+              region_name='auto'
+          )
+          files = {
+              'output/task3_contexts_sample.parquet':          'outcomes/03_contexts_full.parquet',
+              'output/task3_cosine_similarity_sample.parquet': 'outcomes/03_similarity_full.parquet',
+              'output/task3_semantic_summary.json':            'outcomes/03_semantic_summary_full.json',
+              'output/viewer_data.json':                       'outcomes/viewer_data_full.json',
+          }
+          for src, key in files.items():
+              if not os.path.exists(src):
+                  print(f"Skipping {src} (not found)")
+                  continue
+              print(f"Uploading {src} -> {key} ({os.path.getsize(src) / 1e6:.2f} MB)...")
+              s3.upload_file(src, 'parquetunistuttgart', key)
+              print("  done.")
+          EOF
