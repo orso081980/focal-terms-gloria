@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install polars pyarrow boto3 numpy matplotlib
+        run: pip install polars pyarrow boto3 numpy matplotlib scipy
 
       - name: Create directories
         run: mkdir -p output visualizations
@@ -68,6 +68,7 @@ jobs:
               'output/term_frequency_full.parquet':               'outcomes/02_term_frequency_full.parquet',
               'output/task2_analysis.json':                       'outcomes/02_analysis_full.json',
               'visualizations/histogram_focal_terms_full.png':    'outcomes/02_histogram_full.png',
+              'visualizations/density_focal_terms_full.png':      'outcomes/02_density_full.png',
           }
           for src, key in files.items():
               print(f"Uploading {src} -> {key} ({os.path.getsize(src) / 1e6:.2f} MB)...")

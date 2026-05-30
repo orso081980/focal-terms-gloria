@@ -65,7 +65,7 @@ pmed_lazy = (
     .filter(pl.col("pmid").is_not_null())
     .filter(pl.col("term").is_not_null())
     .group_by("pmid", "term")
-    .agg(pl.len().alias("freq_in_paper"))
+    .agg(pl.len().alias("freq_in_cited_paper"))
 )
 
 print("Step 3: Building lazy scan for patent terms...")
@@ -94,7 +94,11 @@ t0 = time.time()
     .join(pmed_lazy, on="pmid", how="inner")
     .join(pat_lazy, on=["patent_id", "term"], how="inner")
     .rename({"term": "focal_term"})
-    .select("patent_id", "pmid", "focal_term", "freq_in_patent", "freq_in_paper")
+    .group_by("patent_id", "focal_term")
+    .agg(
+        pl.first("freq_in_patent"),
+        pl.sum("freq_in_cited_paper"),
+    )
     .sink_parquet(FINAL_PATH)
 )
 
@@ -106,18 +110,31 @@ print(f"  Saved to: {FINAL_PATH} | {elapsed(t0)}")
 print("\nStep 5: Computing summary statistics...")
 t0 = time.time()
 
+# n_pmids is computed from the link table (pmid is no longer in the output file)
+n_pmids_val = (
+    pl.scan_parquet(LINK_PATH)
+    .filter(pl.col("pmid").is_not_null())
+    .with_columns(
+        pl.col("pmid").cast(pl.String).str.extract(r"(\d+)$", 1).cast(pl.Int64).alias("pmid")
+    )
+    .filter(pl.col("pmid").is_not_null())
+    .select(pl.col("pmid").n_unique())
+    .collect()
+    .item()
+)
+
 stats = (
     pl.scan_parquet(FINAL_PATH)
     .select([
         pl.len().alias("n_rows"),
         pl.col("patent_id").n_unique().alias("n_patents"),
-        pl.col("pmid").n_unique().alias("n_pmids"),
         pl.col("focal_term").n_unique().alias("n_focal_terms"),
     ])
     .collect()
 )
 
 print(stats)
+print(f"  n_pmids (from link table): {n_pmids_val:,}")
 print(f"  Done in {elapsed(t0)}")
 
 # =========================
@@ -129,7 +146,7 @@ json_path = OUT_DIR / "focal_terms_full.json"
 json_path.write_text(json.dumps({
     "n_rows":        int(stats_row["n_rows"]),
     "n_patents":     int(stats_row["n_patents"]),
-    "n_pmids":       int(stats_row["n_pmids"]),
+    "n_pmids":       int(n_pmids_val),
     "n_focal_terms": int(stats_row["n_focal_terms"]),
 }, indent=2))
 print(f"  Saved to: {json_path}")

@@ -1,7 +1,10 @@
 import json
 import polars as pl
 import numpy as np
+from scipy.stats import gaussian_kde
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # =========================
@@ -96,6 +99,29 @@ plt.savefig(VIZ_DIR / "histogram_focal_terms_full.png", dpi=300)
 plt.close()
 
 print(f"  Saved: {VIZ_DIR / 'histogram_focal_terms_full.png'}\n")
+
+# KDE density plot (separate output as required by readme)
+print("Step 3b: Creating KDE density plot of focal terms per patent...")
+
+kde = gaussian_kde(values, bw_method="scott")
+x_range = np.linspace(int(values.min()), min(int(values.max()), 200), 400)
+kde_vals = kde(x_range)
+
+fig, ax = plt.subplots(figsize=(10, 6))
+ax.plot(x_range, kde_vals, color="steelblue", linewidth=2)
+ax.fill_between(x_range, kde_vals, alpha=0.3, color="steelblue")
+ax.axvline(values.mean(), linestyle="--", linewidth=2, color="red", label=f"Mean = {values.mean():.2f}")
+ax.axvline(np.median(values), linestyle="--", linewidth=2, color="orange", label=f"Median = {np.median(values):.2f}")
+ax.set_title("Density of Focal Terms per Patent (KDE)", fontsize=14, fontweight="bold")
+ax.set_xlabel("Number of Focal Terms", fontsize=12)
+ax.set_ylabel("Density", fontsize=12)
+ax.legend()
+ax.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.savefig(VIZ_DIR / "density_focal_terms_full.png", dpi=300)
+plt.close()
+
+print(f"  Saved: {VIZ_DIR / 'density_focal_terms_full.png'}\n")
 
 # =========================
 # STEP 4: Find patents with strongest overlap

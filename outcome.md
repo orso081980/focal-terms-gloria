@@ -1,10 +1,46 @@
 # Outcome — Focal Terms Pipeline
 
-## Overview
+## In plain words
 
-This repository implements a three-step pipeline to identify and analyse _focal terms_ — scientific/technical terms that appear in both a patent and its cited scientific papers.
+This project answers a simple question:
+**"When a patent cites a scientific paper, do they share the same vocabulary — and is that vocabulary used the same way?"**
+
+The pipeline works in three steps:
+
+1. **Find the shared terms.** We look at the words (terms) used in each patent, find which scientific papers that patent cites, and check which terms appear in *both* the patent and at least one of those papers. We call these *focal terms*.
+
+2. **Measure the overlap.** How many focal terms does each patent share with its cited papers? Some patents share many (up to 158); most share a handful. This step measures the distribution and identifies the patents and terms with the highest overlap.
+
+3. **Check if the meaning is the same.** A term like *"cell"* could mean very different things in a patent vs. a biology paper. For a sample of 20,000 patent-term pairs, we convert the surrounding context into a sentence embedding and compare how similar the usage is (cosine similarity). A score near 1 means the term is used in the same way; near 0 or negative means the contexts are very different.
 
 All computation runs exclusively on **GitHub Actions**. Input data is downloaded from **Cloudflare R2**, and all output files (Parquet + JSON) are uploaded back to R2 under the `outcomes/` folder. Nothing is committed to the repository.
+
+---
+
+## Results at a glance
+
+| Metric | Value |
+|---|---|
+| Total focal-term pairs | 11,967,149 |
+| Patents covered | 474,011 |
+| PubMed papers linked | 795,519 |
+| Unique focal terms | 34,536 |
+| Mean focal terms per patent | 8.85 |
+| Median focal terms per patent | 6 |
+| Most common focal term | "cell" (500 k occurrences) |
+| Mean semantic similarity | 0.469 |
+
+---
+
+## Interactive viewer
+
+A Vue 3 app (in `focal-terms-app/`) visualises all pipeline outputs. It is automatically deployed to GitHub Pages by workflow `04_deploy_app.yml` whenever `focal-terms-app/` changes.
+
+**Live app:** `https://orso081980.github.io/focal-terms-gloria/`
+
+> **One-time setup required:** In GitHub repo settings → Pages → set Source to **GitHub Actions**.
+
+---
 
 ---
 
@@ -20,9 +56,11 @@ GitHub Actions
     │                  runs 02_analysis.py
     │                  uploads to R2: outcomes/02_*.{parquet,json}
     │
-    └─ Workflow 03 ── downloads outcomes/01_focal_terms_full.parquet + raw files
-                       runs 03_semantic.py
-                       uploads to R2: outcomes/03_*.{parquet,json}, viewer_data.json
+    ├─ Workflow 03 ── downloads outcomes/01_focal_terms_full.parquet + raw files
+    │                  runs 03_semantic.py
+    │                  uploads to R2: outcomes/03_*.{parquet,json}, viewer_data_full.json
+    │
+    └─ Workflow 04 ── builds focal-terms-app/ Vue app ──► deploys to GitHub Pages
 ```
 
 ---
@@ -126,9 +164,8 @@ Run the workflows in sequence:
 
 ## Performance Notes
 
-- Script 01 is the slowest (large data volume). Batched processing (5,000 patents/batch) keeps memory bounded on GitHub's `ubuntu-latest` runners.
-- Script 03 uses CPU-only inference with `sentence-transformers`. A sample of 20,000 pairs is used to keep runtime tractable.
-- Both scripts resume from partial work if a run is interrupted and re-triggered (batch files already on disk are skipped in Script 01).
+- Script 01 uses Polars' **streaming engine** (`sink_parquet`) to process the 3-way join (PAT=700 MB, LINK=554 MB, PMED=198 MB) without loading everything into RAM. No `.collect()` is called — data flows through in chunks.
+- Script 03 caps per-PMID term lists at 300 entries before the join to prevent OOM; this is lossless since the embedding model (`all-MiniLM-L6-v2`) truncates at 256 tokens anyway. A sample of 20,000 pairs is used to keep CPU inference time tractable.
 
 ---
 
