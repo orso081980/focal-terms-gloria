@@ -141,20 +141,47 @@ t0 = time.time()
 
 relevant_pmids = link_clean.select("pmid").unique()
 
-# Load PubMed terms, but only for papers cited by patents in our sample.
+# Load PubMed terms only for papers cited by patents in our sample.
 pmed_terms = (
     pl.scan_parquet(PMED_PATH)
     .select([
         pl.col("pmid").cast(pl.Int64),
         pl.col("term")
     ])
+    .filter(pl.col("pmid").is_not_null())
+    .filter(pl.col("term").is_not_null())
     .join(relevant_pmids.lazy(), on="pmid", how="inner")
     .collect()
 )
 
 print(f"  Loaded {len(pmed_terms):,} PubMed term rows")
 print(f"  RAM usage: {pmed_terms.estimated_size('mb'):.2f} MB")
-print(f"  Done in {elapsed(t0)}\n")
+print(f"  Done in {elapsed(t0)}")
+
+# Pre-compact to avoid OOM in the join:
+#   1) which PMIDs actually contain each focal term (for correct paper filtering)
+#   2) per-PMID term lists capped at 300 (model truncates to 256 tokens anyway)
+MAX_TERMS_PER_PMID = 300
+
+focal_term_df = focal_pairs.select("focal_term").unique().rename({"focal_term": "term"})
+
+pmed_focal_matches = (
+    pmed_terms
+    .join(focal_term_df, on="term", how="inner")
+    .select("pmid", pl.col("term").alias("focal_term"))
+    .unique()
+)
+
+pmed_compact = (
+    pmed_terms
+    .group_by("pmid")
+    .agg(pl.col("term").unique().alias("terms"))
+    .with_columns(pl.col("terms").list.head(MAX_TERMS_PER_PMID))
+)
+
+del pmed_terms, relevant_pmids, focal_term_df
+gc.collect()
+print(f"  Compacted to {len(pmed_compact):,} PMIDs | {len(pmed_focal_matches):,} focal-term matches\n")
 
 # =========================
 # STEP 5: Build paper contexts
@@ -162,27 +189,27 @@ print(f"  Done in {elapsed(t0)}\n")
 print("Step 5: Building cited-paper term contexts...")
 t0 = time.time()
 
-# For each (patent, focal_term) pair, collect all OTHER terms in papers that cite that term.
-# This lets us compare what terms appear alongside the focal term in scientific papers.
-paper_context = (
-    focal_pairs
-    .lazy()
+# Find (patent_id, focal_term, pmid) triples: patents linked to papers that contain the focal term.
+relevant_triples = (
+    focal_pairs.lazy()
     .join(link_clean.lazy(), on="patent_id", how="inner")
-    .join(
-        pmed_terms.lazy().rename({"term": "focal_term"}),
-        on=["pmid", "focal_term"],
-        how="inner"
-    )
+    .join(pmed_focal_matches.lazy(), on=["pmid", "focal_term"], how="inner")
     .select("patent_id", "focal_term", "pmid")
     .unique()
-    .join(pmed_terms.lazy(), on="pmid", how="inner")
-    .filter(pl.col("term") != pl.col("focal_term"))  # Exclude focal term
+    .collect()
+)
+
+# Join triples to the compact per-PMID term lists, then explode and aggregate.
+# Peak RAM: ~(n_triples × MAX_TERMS_PER_PMID × term_size) — bounded and manageable.
+paper_context = (
+    relevant_triples.lazy()
+    .join(pmed_compact.lazy(), on="pmid", how="inner")
+    .explode("terms")
+    .rename({"terms": "term"})
+    .filter(pl.col("term") != pl.col("focal_term"))
     .group_by("patent_id", "focal_term")
-    .agg(
-        pl.col("term")
-        .unique()
-        .alias("paper_context")
-    )
+    .agg(pl.col("term").unique().alias("paper_context"))
+    .with_columns(pl.col("paper_context").list.head(MAX_TERMS_PER_PMID))
     .collect()
 )
 
@@ -190,7 +217,7 @@ print(f"  Built context for {len(paper_context):,} (patent, focal_term) pairs")
 print(f"  RAM usage: {paper_context.estimated_size('mb'):.2f} MB")
 print(f"  Done in {elapsed(t0)}\n")
 
-del link_clean, pmed_terms, relevant_pmids, sample_patents
+del link_clean, pmed_focal_matches, pmed_compact, relevant_triples, sample_patents
 gc.collect()
 
 # =========================
