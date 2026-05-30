@@ -39,7 +39,7 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 # Processing parameters
 N_SAMPLE = 20000      # Sample 20k focal pairs for semantic analysis (reduces computation)
 CHUNK_SIZE = 256      # Process 256 pairs at a time to manage memory
-ENCODE_BATCH = 32     # Batch size for transformer embeddings
+ENCODE_BATCH = 128     # Batch size for transformer embeddings (higher = faster on CPU)
 
 def elapsed(t0):
     """Format elapsed time as 'Xm' or 'Xs' for readability."""

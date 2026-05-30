@@ -169,10 +169,11 @@ jobs:
               region_name='auto'
           )
           files = {
-              'output/task3_contexts_sample.parquet':          'outcomes/03_contexts_full.parquet',
-              'output/task3_cosine_similarity_sample.parquet': 'outcomes/03_similarity_full.parquet',
-              'output/task3_semantic_summary.json':            'outcomes/03_semantic_summary_full.json',
-              'output/viewer_data.json':                       'outcomes/viewer_data_full.json',
+              'output/task3_contexts_sample.parquet':                          'outcomes/03_contexts_full.parquet',
+              'output/task3_cosine_similarity_sample.parquet':                 'outcomes/03_similarity_full.parquet',
+              'output/task3_semantic_summary.json':                            'outcomes/03_semantic_summary_full.json',
+              'output/viewer_data.json':                                       'outcomes/viewer_data_full.json',
+              'visualizations/task3_cosine_similarity_distribution_sample.png': 'outcomes/03_cosine_plot_full.png',
           }
           for src, key in files.items():
               if not os.path.exists(src):
