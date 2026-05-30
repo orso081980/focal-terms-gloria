@@ -12,3 +12,7 @@ data
 
 # Sensitive instruction files
 instruction.md
+final-instruction.md
+readme.md
+adjustment.md
+node_modules
